@@ -162,7 +162,7 @@ class TemporalUnet(nn.Module):
         context: [batch x context_dim]
         """
         b, h, d = x.shape
-
+        # print(1)
         t_emb = self.time_mlp(time)
         c_emb = t_emb
         if self.conditioning_type == "concatenate":

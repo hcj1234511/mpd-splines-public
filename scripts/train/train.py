@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt
 
 from experiment_launcher import single_experiment_yaml, run_experiment
 from mpd import trainer
-from mpd.models import UNET_DIM_MULTS, TemporalUnet
+from mpd.models import UNET_DIM_MULTS, TemporalUnet, TemporalTransformer
 from mpd.models.diffusion_models.context_models import ContextModelQs, ContextModelEEPoseGoal, ContextModelCombined
 from mpd.trainer.trainer import get_num_epochs
 from mpd.utils.loaders import get_planning_task_and_dataset, get_model, get_loss, get_summary
@@ -20,18 +20,18 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 os.environ["WANDB_API_KEY"] = "999"
 WANDB_MODE = "disabled"
 WANDB_ENTITY = "mpd-splines"
-DEBUG = True
+DEBUG = False
 
 
 @single_experiment_yaml
 def experiment(
     ########################################################################
     # Dataset
-    dataset_subdir: str = "EnvSimple2D-RobotPointMass2D-joint_joint-one-RRTConnect",
-    # dataset_subdir: str = 'EnvWarehouse-RobotPanda-config_file_v01-joint_joint-one-RRTConnect',
+    # dataset_subdir: str = "EnvSimple2D-RobotPointMass2D-joint_joint-one-RRTConnect",
+    dataset_subdir: str = 'EnvWarehouse-RobotPanda-config_file_v01-joint_joint-one-RRTConnect',
     dataset_file_merged: str = "dataset_merged_doubled.hdf5",
     reload_data: bool = False,
-    preload_data_to_device: bool = False,
+    preload_data_to_device: bool = True,
     n_task_samples: int = -1,  # -1 for all
     ########################################################################
     # Parametric trajectory
@@ -73,7 +73,7 @@ def experiment(
     batch_size: int = 128,
     lr: float = 3e-4,
     clip_grad: bool = False,
-    num_train_steps: int = 1_000_000,
+    num_train_steps: int = 1_0_000,       #hcj：训练轮数
     use_ema: bool = True,
     use_amp: bool = False,
     # Summary parameters
@@ -86,7 +86,8 @@ def experiment(
     ########################################################################
     # MANDATORY
     # seed: int = int(time.time()),
-    seed: int = 1726484688,
+    # seed: int = 1726484688,
+    seed: int = 1,
     results_dir: str = "logs",
     ########################################################################
     # WandB

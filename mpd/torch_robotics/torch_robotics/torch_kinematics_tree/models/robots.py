@@ -128,3 +128,11 @@ class Differentiable2LinkPlanar(DifferentiableTree):
         self.model_path = robot_file.as_posix()
         self.name = "differentiable_2_link_planar"
         super().__init__(self.model_path, self.name, link_list=link_list, device=device)
+
+# 添加piper机械臂模型类
+class DifferentiablePiper(DifferentiableTree):
+    def __init__(self, link_list: Optional[str] = None, device="cpu"):
+        robot_file = get_robot_path() / "piper_description" / "urdf" / "piper_description_fixed.urdf"
+        self.model_path = robot_file.as_posix()
+        self.name = "differentiable_piper"
+        super().__init__(self.model_path, self.name, link_list=link_list, device=device)

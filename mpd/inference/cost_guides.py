@@ -148,10 +148,20 @@ class CostGuideManagerParametricTrajectory:
         assert q_traj_pos_in_phase.ndim == 3
         q_traj_pos_in_phase_original_shape = q_traj_pos_in_phase.shape
         q_traj_pos_aux = einops.rearrange(q_traj_pos_in_phase, "... d -> (...) d")
+        
+        # Pad to robot DOF if data dimension is smaller (e.g., 6-DOF Piper data with 8-DOF robot)
+        data_dim = q_traj_pos_aux.shape[-1]
+        robot_dof = len(self.robot.q_pos_min)
+        if data_dim < robot_dof:
+            padding = torch.zeros(q_traj_pos_aux.shape[0], robot_dof - data_dim, 
+                                   device=q_traj_pos_aux.device, dtype=q_traj_pos_aux.dtype)
+            q_traj_pos_aux_full = torch.cat([q_traj_pos_aux, padding], dim=-1)
+        else:
+            q_traj_pos_aux_full = q_traj_pos_aux
 
         with TimerCUDA() as t_fk_jac:
             # collision links and jacobians
-            jacs_spatial, link_poses = self.robot.jfk_s_collision_spheres(q_traj_pos_aux)
+            jacs_spatial, link_poses = self.robot.jfk_s_collision_spheres(q_traj_pos_aux_full)
             jacs_spatial_th = torch.stack(jacs_spatial).transpose(
                 0, 1
             )  # ((batch_size, traejectory_length), n_links, 6, d)
@@ -164,7 +174,7 @@ class CostGuideManagerParametricTrajectory:
             )
 
             # end effector links and jacobians
-            jacs_spatial_ee, link_poses_ee = self.robot.jfk_s_ee(q_traj_pos_aux)
+            jacs_spatial_ee, link_poses_ee = self.robot.jfk_s_ee(q_traj_pos_aux_full)
             jacs_spatial_th_ee = torch.stack(jacs_spatial_ee).transpose(
                 0, 1
             )  # ((batch_size, traejectory_length), n_links, 6, d)
@@ -177,6 +187,11 @@ class CostGuideManagerParametricTrajectory:
             link_poses_th_ee = einops.rearrange(
                 link_poses_th_ee, "(b h) ... -> b h ...", b=q_traj_pos_in_phase_original_shape[0]
             )
+        
+        # Trim jacobians to match data dimension if needed
+        if data_dim < robot_dof:
+            jacs_spatial_th = jacs_spatial_th[..., :data_dim]
+            jacs_spatial_th_ee = jacs_spatial_th_ee[..., :data_dim]
 
         if self.debug:
             print(f"FK and Jacobians (time): {t_fk_jac.elapsed:.4f} s")
@@ -355,8 +370,24 @@ class CostGuideManagerParametricTrajectory:
         return cost_value_in_phase, grad_cost_wrt_cp_normalized_per_shape_step
 
     def warmup(self, shape_x, **kwargs):
-        x = torch.randn(shape_x, **self.tensor_args)
-        self.__call__(x, warmup=True)
+        # Create dummy start/goal with correct dimension (data dimension, not robot DOF)
+        data_dim = shape_x[-1]  # Last dimension is the state dimension
+        dummy_start = torch.zeros(data_dim, **self.tensor_args)
+        dummy_goal = torch.zeros(data_dim, **self.tensor_args)
+        
+        # Temporarily set start/goal to correct dimension for warmup
+        old_start = self.parametric_trajectory.q_pos_start
+        old_goal = self.parametric_trajectory.q_pos_goal
+        self.parametric_trajectory.q_pos_start = dummy_start
+        self.parametric_trajectory.q_pos_goal = dummy_goal
+        
+        try:
+            x = torch.randn(shape_x, **self.tensor_args)
+            self.__call__(x, warmup=True)
+        finally:
+            # Restore original values
+            self.parametric_trajectory.q_pos_start = old_start
+            self.parametric_trajectory.q_pos_goal = old_goal
 
 
 class CostSpace:
@@ -407,28 +438,26 @@ class CostJointSpaceJointLimits(CostJointSpace):
     def __init__(self, planning_task, eps=0.03, **kwargs):
         super().__init__(planning_task, **kwargs)
         self.eps = eps
-        self.q_min = self.robot.q_pos_min
-        self.q_max = self.robot.q_pos_max
-        if self.robot.dq_max is not None:
-            self.dq_min = -self.robot.dq_max
-            self.dq_max = self.robot.dq_max
-        else:
-            self.dq_min = None
-            self.dq_max = None
-        if self.robot.ddq_max is not None:
-            self.ddq_min = -self.robot.ddq_max
-            self.ddq_max = self.robot.ddq_max
-        else:
-            self.ddq_min = None
-            self.ddq_max = None
+        # Store original limits (may be trimmed for reduced DOF data)
+        self._q_min_full = self.robot.q_pos_min
+        self._q_max_full = self.robot.q_pos_max
+        self._dq_max_full = self.robot.dq_max
+        self._ddq_max_full = self.robot.ddq_max
 
     def compute_cost_grad_wrt_cp(
         self, control_points, q_traj_pos_in_phase, q_traj_vel_in_phase, q_traj_acc_in_phase, *args, **kwargs
     ):
+        # Get data dimension and trim limits if needed
+        data_dim = q_traj_pos_in_phase.shape[-1]
+        q_min = self._q_min_full[:data_dim]
+        q_max = self._q_max_full[:data_dim]
+        dq_max = self._dq_max_full[:data_dim] if self._dq_max_full is not None else None
+        ddq_max = self._ddq_max_full[:data_dim] if self._ddq_max_full is not None else None
+        
         # positions
         # transform the joint position limits from time to phase
-        q_min_in_phase = self.q_min + self.eps
-        q_max_in_phase = self.q_max - self.eps
+        q_min_in_phase = q_min + self.eps
+        q_max_in_phase = q_max - self.eps
         mask_low = torch.less_equal(q_traj_pos_in_phase, q_min_in_phase)
         mask_high = torch.greater_equal(q_traj_pos_in_phase, q_max_in_phase)
 
@@ -452,10 +481,11 @@ class CostJointSpaceJointLimits(CostJointSpace):
 
         cost_vel_limit = 0.0
         grad_cost_vel_wrt_cp = 0.0
-        if self.dq_max is not None:
+        if dq_max is not None:
+            dq_min = -dq_max
             # transform the joint velocity limits from time to phase
-            dq_min_in_phase = (self.dq_min + self.eps) * rs_inv[..., None]
-            dq_max_in_phase = (self.dq_max - self.eps) * rs_inv[..., None]
+            dq_min_in_phase = (dq_min + self.eps) * rs_inv[..., None]
+            dq_max_in_phase = (dq_max - self.eps) * rs_inv[..., None]
             mask_low = torch.less_equal(q_traj_vel_in_phase, dq_min_in_phase)
             mask_high = torch.greater_equal(q_traj_vel_in_phase, dq_max_in_phase)
 
@@ -475,13 +505,14 @@ class CostJointSpaceJointLimits(CostJointSpace):
         # accelerations
         cost_acc_limit = 0.0
         grad_cost_acc_wrt_cp = 0.0
-        if self.ddq_max is not None:
+        if ddq_max is not None:
+            ddq_min = -ddq_max
             # transform the joint acceleration limits from time to phase
             ddq_min_in_phase = (
-                self.ddq_min + self.eps - q_traj_vel_in_phase * dr_ds[..., None] * rs[..., None]
+                ddq_min + self.eps - q_traj_vel_in_phase * dr_ds[..., None] * rs[..., None]
             ) * rs_inv[..., None] ** 2
             ddq_max_in_phase = (
-                self.ddq_max - self.eps - q_traj_vel_in_phase * dr_ds[..., None] * rs[..., None]
+                ddq_max - self.eps - q_traj_vel_in_phase * dr_ds[..., None] * rs[..., None]
             ) * rs_inv[..., None] ** 2
             mask_low = torch.less_equal(q_traj_acc_in_phase, ddq_min_in_phase)
             mask_high = torch.greater_equal(q_traj_acc_in_phase, ddq_max_in_phase)

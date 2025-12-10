@@ -1,0 +1,46 @@
+# Define the limits of the EE pose in the base frame
+# EE poses are sampled inside the limits, to generate multiple joint configurations used for planning
+# 根据 Piper 实际工作空间调整（比 Panda 小很多）
+# Piper 可达范围 (10%-90%): X=[-0.23,0.31], Y=[-0.35,0.35], Z=[-0.05,0.66]
+env_id: 'EnvWarehouse'
+robot_id: 'RobotPiper'
+
+# translations: limits of translations in each axis to sample from
+# rotations: end-effector rotation in base frame and limits of rotations around each axis to sample from
+
+# If true, the robot will move to these pose regions, and also start and end at these pose regions
+move_between_pose_regions: True
+
+pose_regions:
+  region_00:  # 右前方区域
+    translation:
+      x: [[0.15, 0.28]]     # 缩小范围，适应 Piper 臂展
+      y: [[-0.30, -0.15]]   # 缩小 Y 范围
+      z: [[0.25, 0.40]]
+    rotation:
+      base: [[-1, 0, 0], [0, 1, 0], [0, 0, -1]]
+      x: [[-5., 5.]]
+      y: [[-5., 5.]]
+      z: [[-90., 90.]]
+
+  region_01:  # 左前方区域
+    translation:
+      x: [[0.18, 0.28]]     # 缩小范围
+      y: [[0.15, 0.30]]     # 缩小 Y 范围
+      z: [[0.20, 0.35]]
+    rotation:
+      base: [[0, -1, 0], [0, 0, 1], [-1, 0, 0]]
+      x: [[-5., 5.]]
+      y: [[-5., 5.]]
+      z: [[-10., 10.]]
+
+  region_02:  # 正前方区域
+    translation:
+      x: [[0.20, 0.30]]     # 缩小范围
+      y: [[-0.15, 0.15]]    # 缩小 Y 范围
+      z: [[0.15, 0.30]]
+    rotation:
+      base: [[-1, 0, 0], [0, 1, 0], [0, 0, -1]]
+      x: [[-5., 5.]]
+      y: [[-5., 5.]]
+      z: [[-90., 90.]]

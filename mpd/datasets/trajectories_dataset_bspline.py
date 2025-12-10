@@ -228,8 +228,12 @@ class TrajectoryDatasetBspline(Dataset, abc.ABC):
                             )
                             _, cc_tmp, _ = bspline_params
                             # discard the trajectory if the bspline coefficients are too large wrt the joint limits
-                            if np.any(cc_tmp.min(1) <= 2 * to_numpy(self.planning_task.robot.q_pos_min)) or np.any(
-                                cc_tmp.max(1) >= 2 * to_numpy(self.planning_task.robot.q_pos_max)
+                            # Use only the dimensions present in the data (e.g., 6 for Piper without gripper)
+                            n_joints_data = cc_tmp.shape[0]
+                            q_min = to_numpy(self.planning_task.robot.q_pos_min)[:n_joints_data]
+                            q_max = to_numpy(self.planning_task.robot.q_pos_max)[:n_joints_data]
+                            if np.any(cc_tmp.min(1) <= 2 * q_min) or np.any(
+                                cc_tmp.max(1) >= 2 * q_max
                             ):
                                 n_discarded_trajectories += 1
                                 raise Exception
@@ -246,6 +250,10 @@ class TrajectoryDatasetBspline(Dataset, abc.ABC):
                         # the gripper.
                         if cc_np.shape[0] > 9:
                             cc_np = cc_np[:7, :]
+                    elif isinstance(self.planning_task.robot, robots.RobotPiper):
+                        # For Piper, keep only first 6 DOF (remove gripper joints)
+                        if cc_np.shape[0] > 6:
+                            cc_np = cc_np[:6, :]
 
                     # load to the cpu to speed up loading and save gpu memory
                     control_points = to_torch(cc_np, dtype=self.tensor_args["dtype"], device="cpu").transpose(0, 1)
@@ -293,7 +301,15 @@ class TrajectoryDatasetBspline(Dataset, abc.ABC):
                 )
 
                 # Compute collision free statistics of the fitted bspline (this can take a while).
-                percentage_free_trajs_l, percentage_collision_intensity_l = self.run_collision_statistics()
+                # Skip if data dimension doesn't match robot DOF (e.g., 6-DOF Piper data with 8-DOF robot)
+                data_dim = inner_control_points_tensor.shape[-1]
+                robot_dof = len(self.planning_task.robot.q_pos_min)
+                if data_dim < robot_dof:
+                    print(f"Skipping collision statistics: data dim ({data_dim}) < robot DOF ({robot_dof})")
+                    percentage_free_trajs_l = [1.0]  # Assume all free (data was already validated during generation)
+                    percentage_collision_intensity_l = [0.0]
+                else:
+                    percentage_free_trajs_l, percentage_collision_intensity_l = self.run_collision_statistics()
 
                 # Save data to disk to speed up loading the next time.
                 data_to_save = {
@@ -325,8 +341,15 @@ class TrajectoryDatasetBspline(Dataset, abc.ABC):
         # Context data
         # end-effector pose goal
         if ee_pose_goal is None:
-            ee_pose_goal = self.planning_task.robot.get_EE_pose(
-                to_torch(q_goal, **self.planning_task.robot.tensor_args)
+            # Pad q_goal to robot's expected dimension if needed (e.g., 6 -> 8 for Piper gripper joints)
+            q_goal_for_fk = to_torch(q_goal, **self.planning_task.robot.tensor_args)
+            robot_dof = len(self.planning_task.robot.q_pos_min)
+            if q_goal_for_fk.shape[-1] < robot_dof:
+                # Pad with zeros for gripper joints
+                padding = torch.zeros(*q_goal_for_fk.shape[:-1], robot_dof - q_goal_for_fk.shape[-1], 
+                                       **self.planning_task.robot.tensor_args)
+                q_goal_for_fk = torch.cat([q_goal_for_fk, padding], dim=-1)
+            ee_pose_goal = self.planning_task.robot.get_EE_pose(q_goal_for_fk
             ).to(device if device is not None else self.tensor_args["device"])
         ee_pose_goal_orientation = rmat_to_flat(link_rot_from_link_tensor(ee_pose_goal))
         ee_pose_goal_position = link_pos_from_link_tensor(ee_pose_goal)

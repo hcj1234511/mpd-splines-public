@@ -154,7 +154,7 @@ def train(
         scheduler = CosineAnnealingWarmRestarts(optimizers[0], iters_dataloader)
 
     # Automatic Mixed Precision
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    scaler = torch.amp.GradScaler(enabled=use_amp)
 
     if val_dataloader is not None:
         assert val_loss_fn is not None, "If validation set is passed, have to pass a validation loss_fn!"

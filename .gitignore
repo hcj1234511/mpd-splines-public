@@ -211,3 +211,17 @@ scripts/plots/planar_4_link/inference_results*
 scripts/plots/panda_front_page_thesis/plots/
 
 scripts/plots/planar_4_link/plots*
+
+# mine Chengjin Hong
+model_hcj
+data_trajectories_hcj
+deps
+mpd/torch_robotics/torch_robotics/data/urdf/robots/franka_description/robots/panda_arm.backup.dae
+scripts/Hcj/0_panda
+scripts/Hcj/1_piper
+scripts/Hcj/500_panda
+scripts/inference/logs
+scripts/inference/logs_inference_piper
+scripts/train/logs
+scripts/train/logs_piper
+scripts/train/wandb

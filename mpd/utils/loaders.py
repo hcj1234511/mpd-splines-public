@@ -26,6 +26,7 @@ def get_planning_task_and_dataset(
     phase_time_class="PhaseTimeLinear",
     phase_time_args={},
     dataset_subdir=None,
+    dataset_dir=None,  # Full path to dataset directory (alternative to dataset_subdir)
     dataset_file_merged="dataset_merged.hdf5",
     context_qs=False,
     context_ee_goal_pose=False,
@@ -51,8 +52,13 @@ def get_planning_task_and_dataset(
     tensor_args=DEFAULT_TENSOR_ARGS,
     **kwargs,
 ):
-    dataset_subdir = dataset_subdir
-    base_dir = os.path.join(DATASET_BASE_DIR, dataset_subdir)
+    # Support both dataset_dir (full path) and dataset_subdir (relative to DATASET_BASE_DIR)
+    if dataset_dir is not None:
+        base_dir = dataset_dir
+    elif dataset_subdir is not None:
+        base_dir = os.path.join(DATASET_BASE_DIR, dataset_subdir)
+    else:
+        raise ValueError("Either dataset_dir or dataset_subdir must be provided")
 
     # get the dataset arguments
     dataset_args = load_params_from_yaml(os.path.join(base_dir, "args.yaml"))

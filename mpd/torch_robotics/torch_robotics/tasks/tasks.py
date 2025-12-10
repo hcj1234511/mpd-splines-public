@@ -777,7 +777,9 @@ class PlanningTask(Task):
             q_acc_goal = to_numpy(q_acc_goal)
 
         if fig is None or axs is None:
-            fig, axs = plt.subplots(self.robot.q_dim, 3, squeeze=False, figsize=(18, 2.5 * self.robot.q_dim))
+            # Use data dimension instead of robot dimension (for reduced DOF data like Piper 6-DOF)
+            data_q_dim = q_pos_trajs_np.shape[-1]
+            fig, axs = plt.subplots(data_q_dim, 3, squeeze=False, figsize=(18, 2.5 * data_q_dim))
 
         axs[0, 0].set_title("Position")
         axs[0, 1].set_title("Velocity")
@@ -795,7 +797,7 @@ class PlanningTask(Task):
             ):
                 # Positions, velocities, accelerations
                 for j, q_trajs_filtered_item in enumerate(q_trajs_filtered):
-                    if q_trajs_filtered_item is not None:
+                    if q_trajs_filtered_item is not None and i < q_trajs_filtered_item.shape[-1]:
                         plot_multiline(
                             ax[j],
                             np.repeat(timesteps, q_trajs_filtered_item.shape[0], axis=0),
@@ -806,39 +808,42 @@ class PlanningTask(Task):
 
             if q_pos_traj_best is not None:
                 q_pos_traj_best_np = to_numpy(q_pos_traj_best)
-                plot_multiline(ax[0], timesteps, q_pos_traj_best_np[..., i].reshape(1, -1), color="blue", **kwargs)
+                if i < q_pos_traj_best_np.shape[-1]:
+                    plot_multiline(ax[0], timesteps, q_pos_traj_best_np[..., i].reshape(1, -1), color="blue", **kwargs)
             if q_vel_traj_best is not None:
                 q_vel_traj_best_np = to_numpy(q_vel_traj_best)
-                plot_multiline(ax[1], timesteps, q_vel_traj_best_np[..., i].reshape(1, -1), color="blue", **kwargs)
+                if i < q_vel_traj_best_np.shape[-1]:
+                    plot_multiline(ax[1], timesteps, q_vel_traj_best_np[..., i].reshape(1, -1), color="blue", **kwargs)
             if q_acc_traj_best is not None:
                 q_acc_traj_best_np = to_numpy(q_acc_traj_best)
-                plot_multiline(ax[2], timesteps, q_acc_traj_best_np[..., i].reshape(1, -1), color="blue", **kwargs)
+                if i < q_acc_traj_best_np.shape[-1]:
+                    plot_multiline(ax[2], timesteps, q_acc_traj_best_np[..., i].reshape(1, -1), color="blue", **kwargs)
 
             # Start and goal
             for j, x in enumerate([q_pos_start, q_vel_start, q_acc_start]):
-                if x is not None:
+                if x is not None and i < len(x):
                     ax[j].scatter(t_start, x[i], color="green")
 
             for j, x in enumerate([q_pos_goal, q_vel_goal, q_acc_goal]):
-                if x is not None:
+                if x is not None and i < len(x):
                     ax[j].scatter(t_goal, x[i], color="purple")
 
             ax[0].set_ylabel(f"$q_{i}$")
 
-            if set_q_pos_limits:
+            if set_q_pos_limits and i < len(self.robot.q_pos_min_np):
                 q_pos_min, q_pos_max = self.robot.q_pos_min_np[i], self.robot.q_pos_max_np[i]
                 padding = 0.1 * np.abs(q_pos_max - q_pos_min)
                 ax[0].set_ylim(q_pos_min - padding, q_pos_max + padding)
                 ax[0].plot([t_start, t_goal], [q_pos_max, q_pos_max], color="k", linestyle="--")
                 ax[0].plot([t_start, t_goal], [q_pos_min, q_pos_min], color="k", linestyle="--")
-            if set_q_vel_limits and self.robot.dq_max_np is not None:
+            if set_q_vel_limits and self.robot.dq_max_np is not None and i < len(self.robot.dq_max_np):
                 ax[1].plot(
                     [t_start, t_goal], [self.robot.dq_max_np[i], self.robot.dq_max_np[i]], color="k", linestyle="--"
                 )
                 ax[1].plot(
                     [t_start, t_goal], [-self.robot.dq_max_np[i], -self.robot.dq_max_np[i]], color="k", linestyle="--"
                 )
-            if set_q_acc_limits and self.robot.ddq_max_np is not None:
+            if set_q_acc_limits and self.robot.ddq_max_np is not None and i < len(self.robot.ddq_max_np):
                 ax[2].plot(
                     [t_start, t_goal], [self.robot.ddq_max_np[i], self.robot.ddq_max_np[i]], color="k", linestyle="--"
                 )
@@ -857,7 +862,8 @@ class PlanningTask(Task):
             control_points_timesteps = to_numpy(self.parametric_trajectory.get_phase_steps())
             for control_points_np_one in control_points_np:
                 for i, ax in enumerate(axs):
-                    ax[0].scatter(control_points_timesteps, control_points_np_one[:, i], color="red", s=2**2, zorder=10)
+                    if i < control_points_np_one.shape[1]:  # Check dimension bounds
+                        ax[0].scatter(control_points_timesteps, control_points_np_one[:, i], color="red", s=2**2, zorder=10)
 
         return fig, axs
 

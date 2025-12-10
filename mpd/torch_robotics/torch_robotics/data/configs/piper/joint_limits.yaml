@@ -1,0 +1,48 @@
+# Joint limits for Piper robot
+joint1:
+  qmax: 2.618
+  qmin: -2.618
+  qdot_max: 5.0
+  qddot_max: 15.0
+
+joint2:
+  qmax: 3.14
+  qmin: 0
+  qdot_max: 5.0
+  qddot_max: 15.0
+
+joint3:
+  qmax: 0
+  qmin: -2.967
+  qdot_max: 5.0
+  qddot_max: 15.0
+
+joint4:
+  qmax: 1.745
+  qmin: -1.745
+  qdot_max: 5.0
+  qddot_max: 15.0
+
+joint5:
+  qmax: 1.22
+  qmin: -1.22
+  qdot_max: 5.0
+  qddot_max: 15.0
+
+joint6:
+  qmax: 2.0944
+  qmin: -2.0944
+  qdot_max: 3.0
+  qddot_max: 15.0
+
+joint7:
+  qmax: 0.035
+  qmin: 0.0
+  qdot_max: 1.0
+  qddot_max: 5.0
+
+joint8:
+  qmax: 0.0
+  qmin: -0.035
+  qdot_max: 1.0
+  qddot_max: 5.0

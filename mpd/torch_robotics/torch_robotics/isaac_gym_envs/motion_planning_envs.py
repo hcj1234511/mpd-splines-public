@@ -3,11 +3,25 @@ import time
 from copy import copy
 from math import ceil
 from pathlib import Path
-
+import h5py
 import cv2
 import imageio
 import matplotlib
 import numpy as np
+import pandas as pd
+
+# 兼容老代码：如果没有这些属性，就给它补上
+if not hasattr(np, 'float'):
+    np.float = float
+if not hasattr(np, 'int'):
+    np.int = int
+if not hasattr(np, 'bool'):
+    np.bool = bool
+if not hasattr(np, 'complex'):
+    np.complex = complex
+if not hasattr(np, 'object'):
+    np.object = object
+
 from dotmap import DotMap
 from moviepy.video.io.ImageSequenceClip import ImageSequenceClip
 from moviepy.video.io.VideoFileClip import VideoFileClip
@@ -25,7 +39,7 @@ from mpd.parametric_trajectory.trajectory_bspline import ParametricTrajectoryBsp
 from torch_robotics.environments import EnvTableShelf, EnvWarehouse
 from torch_robotics.environments.env_spheres_3d import EnvSpheres3D
 from torch_robotics.environments.primitives import MultiSphereField, MultiBoxField
-from torch_robotics.robots.robot_panda import RobotPanda
+from torch_robotics.robots.robot_piper import RobotPiper
 from torch_robotics.tasks.tasks import PlanningTask
 from torch_robotics.torch_kinematics_tree.geometrics.quaternion import rotation_matrix_to_q
 from torch_robotics.torch_kinematics_tree.models.robots import modify_robot_urdf_grasped_object
@@ -236,7 +250,8 @@ class MotionPlanningIsaacGymEnv:
         env,
         robot,
         asset_root=f"{os.environ['HOME']}/Projects/MotionPlanningDiffusion/mpd/deps/isaacgym/assets",
-        robot_asset_file="urdf/franka_description/robots/franka_panda.urdf",
+        # robot_asset_file="urdf/piper_description/robots/piper_description.urdf",
+        robot_asset_file="urdf/piper_description/urdf/piper_description_fixed.urdf",
         enable_dynamics=False,
         controller_type="position",
         num_envs=8,
@@ -352,26 +367,24 @@ class MotionPlanningIsaacGymEnv:
         asset_options = gymapi.AssetOptions()
         asset_options.armature = 0.01
         asset_options.fix_base_link = True
-        asset_options.disable_gravity = True
-        asset_options.flip_visual_attachments = True
+        asset_options.disable_gravity = False
+        asset_options.flip_visual_attachments = False             #将panda机械臂换成piper机械臂时需要将asset_options.flip_visual_attachments由True 改为False
         robot_asset = self.gym.load_asset(self.sim, os.path.abspath(asset_root), robot_asset_file, asset_options)
 
         self.robot_end_effector_link_name = self.robot_tr.link_name_ee
 
-        # configure franka dofs
+        # configure piper dofs
         robot_dof_properties = self.gym.get_asset_dof_properties(robot_asset)
         self.robot_dof_lower_limits = robot_dof_properties["lower"]
         self.robot_dof_upper_limits = robot_dof_properties["upper"]
         robot_dof_ranges = self.robot_dof_upper_limits - self.robot_dof_lower_limits
         robot_dof_mids = 0.3 * (self.robot_dof_upper_limits + self.robot_dof_lower_limits)
-
+        # print('----------------------------- ',self.robot_dof_lower_limits)
         # robot arm properties
         if self.controller_type == "position":
             robot_dof_properties["driveMode"][: self.robot_tr.arm_q_dim].fill(gymapi.DOF_MODE_POS)
-            robot_dof_properties["stiffness"][: self.robot_tr.arm_q_dim].fill(1000.0)
-            robot_dof_properties["damping"][: self.robot_tr.arm_q_dim] = 2.0 * np.sqrt(
-                robot_dof_properties["stiffness"][: self.robot_tr.arm_q_dim]
-            )
+            robot_dof_properties["stiffness"][: self.robot_tr.arm_q_dim].fill(400.0)
+            robot_dof_properties["damping"][: self.robot_tr.arm_q_dim].fill(80.0)
         else:
             raise NotImplementedError
 
@@ -384,15 +397,17 @@ class MotionPlanningIsaacGymEnv:
         # default dof states (position and velocities)
         self.robot_num_dofs = self.gym.get_asset_dof_count(robot_asset)
         self.default_dof_pos = np.zeros(self.robot_num_dofs, dtype=np.float32)
-        # default_dof_pos[:self.robot.arm_q_dim] = robot_dof_mids[:self.robot.arm_q_dim]
-
+  
+        # Set all arm joints to 0
+        self.default_dof_pos[:self.robot_tr.arm_q_dim] = 0.0
+        # print('----------------------------- ',self.default_dof_pos)
         # grippers open
         if self.robot_tr.gripper_q_dim > 0:
             self.default_dof_pos[self.robot_tr.arm_q_dim :] = self.robot_dof_upper_limits[self.robot_tr.arm_q_dim :]
 
         self.default_dof_state = np.zeros(self.robot_num_dofs, gymapi.DofState.dtype)
         self.default_dof_state["pos"] = self.default_dof_pos
-
+        
         ###############################################################################################################
         # Create environments
         num_per_row = int(np.sqrt(self.num_envs))
@@ -411,6 +426,7 @@ class MotionPlanningIsaacGymEnv:
         # robots pose
         robot_pose = gymapi.Transform()
         robot_pose.p = gymapi.Vec3(0, 0, 0)
+        robot_pose.r = gymapi.Quat.from_euler_zyx(0.0, 0.0, 0.0)
 
         self.envs = []
         self.robot_handles = []
@@ -601,13 +617,18 @@ class MotionPlanningIsaacGymEnv:
 
         # Make sure joint positions are in the same device as the pipeline
         q_pos_starts = q_pos_starts.to(**self.tensor_args)
+        
+        # Determine the actual arm dimension to use (handle both 6-DOF and 8-DOF inputs)
+        input_dim = q_pos_starts.shape[-1]
+        arm_dim = min(input_dim, self.robot_num_dofs - self.robot_tr.gripper_q_dim)
 
         dof_pos_tensor = torch.zeros((self.num_envs, self.robot_num_dofs), **self.tensor_args)
-        dof_pos_tensor[: q_pos_starts.shape[0], : self.robot_tr.arm_q_dim] = q_pos_starts
+        dof_pos_tensor[: q_pos_starts.shape[0], : arm_dim] = q_pos_starts[..., :arm_dim]
         if self.draw_goal_configuration:
             assert q_pos_goal is not None
             self.goal_joint_position = q_pos_goal
-            dof_pos_tensor[self.env_goal_configuration_idx, : self.robot_tr.arm_q_dim] = q_pos_goal
+            goal_dim = min(q_pos_goal.shape[-1], arm_dim)
+            dof_pos_tensor[self.env_goal_configuration_idx, : goal_dim] = q_pos_goal[..., :goal_dim]
 
         # Oepn grippers
         if self.robot_tr.gripper_q_dim > 0:
@@ -661,10 +682,14 @@ class MotionPlanningIsaacGymEnv:
         ###############################################################################################################
         # Deploy control based on type
         action_dof_target = torch.zeros_like(self.robot_dof_pos).squeeze(-1)
-        action_dof_target[: actions.shape[0], : self.robot_tr.arm_q_dim] = actions[..., : self.robot_tr.arm_q_dim]
+        # Handle both 6-DOF and 8-DOF inputs
+        input_dim = actions.shape[-1]
+        arm_dim = min(input_dim, self.robot_num_dofs - self.robot_tr.gripper_q_dim)
+        action_dof_target[: actions.shape[0], : arm_dim] = actions[..., :arm_dim]
         if self.draw_goal_configuration:
             if self.controller_type == "position":
-                action_dof_target[self.env_goal_configuration_idx, : self.robot_tr.arm_q_dim] = self.goal_joint_position
+                goal_dim = min(self.goal_joint_position.shape[-1], arm_dim)
+                action_dof_target[self.env_goal_configuration_idx, : goal_dim] = self.goal_joint_position[..., :goal_dim]
             else:
                 raise NotImplementedError
 
@@ -926,7 +951,7 @@ if __name__ == "__main__":
 
     env = EnvWarehouse(rotation_z_axis_deg=-30, tensor_args=tensor_args)
 
-    robot = RobotPanda(tensor_args=tensor_args)
+    robot = RobotPiper(tensor_args=tensor_args)
 
     parametric_trajectory = ParametricTrajectoryBspline(
         n_control_points=18,
@@ -942,13 +967,14 @@ if __name__ == "__main__":
 
     # -------------------------------- Physics --------------------------------
     draw_collision_spheres = False
-    robot_asset_file = robot.robot_urdf_collision_spheres_file if draw_collision_spheres else robot.robot_urdf_file
+    # robot_asset_file = robot.robot_urdf_collision_spheres_file if draw_collision_spheres else robot.robot_urdf_file
     num_envs = 5
     motion_planning_isaac_env = MotionPlanningIsaacGymEnv(
         env,
         robot,
         asset_root=get_robot_path().as_posix(),
-        robot_asset_file=robot_asset_file.replace(get_robot_path().as_posix() + "/", ""),
+        # robot_asset_file=robot_asset_file.replace(get_robot_path().as_posix() + "/", ""),
+        robot_asset_file="piper_description/urdf/piper_description_fixed.urdf",
         controller_type="position",
         num_envs=num_envs,
         all_robots_in_one_env=True,
@@ -966,27 +992,61 @@ if __name__ == "__main__":
         draw_ee_pose_goal=False,
     )
 
-    motion_planning_isaac_env.ee_pose_goal = torch.tensor([0.5, 0, 0.5, 0, 0, 0, 1], **tensor_args)
-
+    # motion_planning_isaac_env.ee_pose_goal = torch.tensor([0.5, 0, 0.5, 0, 0, 0, 1], **tensor_args)
+    
     motion_planning_controller = MotionPlanningControllerIsaacGym(motion_planning_isaac_env)
-    trajectories_joint_pos = (
-        torch.rand(robot.q_dim, **tensor_args)
-        * (motion_planning_isaac_env.robot_dof_upper_limits[:7] - motion_planning_isaac_env.robot_dof_lower_limits[:7])
-        + motion_planning_isaac_env.robot_dof_lower_limits[:7]
-    )
-    trajectories_joint_pos = trajectories_joint_pos.repeat(100, num_envs, 1)
-    trajectories_joint_pos_final = torch.randn_like(trajectories_joint_pos)
-    trajectories_joint_pos = trajectories_joint_pos_final - trajectories_joint_pos
-    trajectories_joint_pos *= 0.0
-    trajectories_joint_pos += 0.2
-    trajectories_joint_pos *= 0.0
+    
+    # while not motion_planning_isaac_env.gym.query_viewer_has_closed(motion_planning_isaac_env.viewer):
+    # # 如果你暂时不想让它动，下面这句可以不更新，只保持 initial_q
+    # # gym.set_actor_dof_position_targets(envs[0], piper_handles[0], initial_q)
+    #     motion_planning_isaac_env.gym.simulate(motion_planning_isaac_env.sim)
+    #     motion_planning_isaac_env.gym.fetch_results(motion_planning_isaac_env.sim, True)
+
+    #     motion_planning_isaac_env.gym.step_graphics(motion_planning_isaac_env.sim)
+    #     motion_planning_isaac_env.gym.draw_viewer(motion_planning_isaac_env.viewer, motion_planning_isaac_env.sim, True)
+
+    #     motion_planning_isaac_env.gym.sync_frame_time(motion_planning_isaac_env.sim)
+
+    # motion_planning_isaac_env.gym.destroy_viewer(motion_planning_isaac_env.viewer)
+    # motion_planning_isaac_env.gym.destroy_sim(motion_planning_isaac_env.sim)
+
+    # Set all joint positions to 0
+    initial_joint_pos = torch.zeros(robot.arm_q_dim, **tensor_args)
+    trajectories_joint_pos = initial_joint_pos.repeat(100, num_envs, 1)
+    
+    # file_path = "joint_states_2025-11-09_11-51-44.csv"
+    # df = pd.read_csv(file_path)
+    # trajectories_np = df.iloc[1:429, 1:7].to_numpy() #shape (428, 6)
+
+    # 从训练数据中读取一条执行
+    # root_dir = Path('/home/hong/Projects/MotionPlanningDiffusion/mpd-splines-public')
+
+    # path = root_dir / 'data_trajectories_hcj' / 'piper_100000' / 'dataset_merged.hdf5'
+    # with h5py.File(path, 'r') as f:
+    #     sol_path = f['sol_path']
+    #     trajectories_np = sol_path
+    #     print('---------------------------',trajectories_np.shape)
+    # trajectories_np = trajectories_np[:, :6]
+    # print('---------------------------',trajectories_np.shape)
+
+    # 执行推理轨迹
+    path = "/home/hong/Projects/MotionPlanningDiffusion/mpd-splines-public/scripts/inference/logs_inference_piper/1/results_single_plan-000.pt"
+    data = torch.load(path, map_location="cpu")  # 在 mpd 环境里 dotmap 已经有了
+    # 最优关节轨迹（位置）
+    trajectories_np = data["q_trajs_pos_best"]   # Tensor [T, D]，例如 [256, 6]
+
+    # 3. 转成 torch 张量，并 reshape 成 (428, 1, 6)
+    trajectories_tensor = torch.tensor(trajectories_np, dtype=torch.float32)  # (428, 6)
+    trajectories_tensor = trajectories_tensor.unsqueeze(1)                    # (428, 1, 6)
+    print(trajectories_tensor[-1][0])
     motion_planning_controller.execute_trajectories(
-        trajectories_joint_pos,
-        q_pos_starts=trajectories_joint_pos[0],
-        q_pos_goal=trajectories_joint_pos[-1][0],
-        n_pre_steps=100,
+        trajectories_tensor,
+        q_pos_starts=trajectories_tensor[0],
+        q_pos_goal=trajectories_tensor[-1][0],
+        n_pre_steps=60,
         n_post_steps=1000,
-        make_video=True,
+        make_video=False,
         video_duration=5.0,
         make_gif=False,
+        stop_robot_if_in_contact = True
     )

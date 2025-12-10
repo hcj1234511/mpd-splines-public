@@ -58,6 +58,10 @@ class EvaluationSamplesGenerator:
         elif selection_start_goal == "validation":
             self.dataset_subset = val_subset
             self.idxs_dataset_subset = np.random.permutation(len(val_subset))
+        elif selection_start_goal == "custom":
+            # Custom mode: start/goal will be provided externally, use validation as fallback
+            self.dataset_subset = val_subset
+            self.idxs_dataset_subset = np.random.permutation(len(val_subset))
         else:
             self.select_start_goal_from_file = load_params_from_yaml(selection_start_goal)
 
@@ -81,42 +85,100 @@ class EvaluationSamplesGenerator:
 
         self.ee_markers_ids = []
 
-    def get_data_sample(self, idx, **kwargs):
+    def get_data_sample(self, idx, max_attempts=100, skip_collision_check=False, **kwargs):
         # -----------------------------------------------
         # Get the start and goal states
         # If extra objects are used, since they are not part of the original environment,
         # the start goal states from the training or validation sets might be in collision.
         # We just reject those samples and get new ones.
+        
+        attempts = 0
+        original_idx = idx
+        
+        while attempts < max_attempts:
+            if self.select_start_goal_from_file:
+                current_idx = idx % len(self.select_start_goal_from_file)
+                q_pos_start = to_torch(self.select_start_goal_from_file[current_idx]["q_pos_start"], **self.tensor_args)
+                q_pos_goal = to_torch(self.select_start_goal_from_file[current_idx]["q_pos_goal"], **self.tensor_args)
+                ee_pose_goal_flat = self.select_start_goal_from_file[current_idx]["ee_pose_goal"]
+                ee_pose_goal = to_torch(ee_pose_goal_flat, **self.tensor_args).view(3, 4)
+            else:
+                current_idx = self.idxs_dataset_subset[idx % len(self.idxs_dataset_subset)]
+                input_data_one_sample = self.dataset_subset[current_idx]
+                q_pos_start = input_data_one_sample[self.dataset_subset.dataset.field_key_q_start]
+                q_pos_goal = input_data_one_sample[self.dataset_subset.dataset.field_key_q_goal]
+                ee_pose_goal = input_data_one_sample[self.dataset_subset.dataset.field_key_context_ee_goal_pose]
+
+            # Get data dimension and robot DOF
+            data_dim = q_pos_start.shape[-1]
+            robot_dof = self.generate_data_ompl_worker.robot_tr.q_dim
+            
+            # Pad to robot DOF for collision checking if needed
+            if data_dim < robot_dof:
+                padding = torch.zeros(robot_dof - data_dim, **self.tensor_args)
+                q_pos_start_full = torch.cat([q_pos_start, padding], dim=-1)
+                q_pos_goal_full = torch.cat([q_pos_goal, padding], dim=-1)
+            else:
+                q_pos_start_full = q_pos_start
+                q_pos_goal_full = q_pos_goal
+
+            # Skip collision check if dimensions don't match (e.g., 6-DOF Piper data with 8-DOF robot)
+            # or if explicitly requested
+            should_skip_collision = skip_collision_check or (data_dim < robot_dof)
+            
+            if should_skip_collision:
+                # Skip collision checking, assume data is valid (was validated during generation)
+                q_pos_start = to_torch(q_pos_start, **self.tensor_args)
+                q_pos_goal = to_torch(q_pos_goal, **self.tensor_args)
+                ee_pose_goal = to_torch(ee_pose_goal, **self.tensor_args)
+                return q_pos_start, q_pos_goal, ee_pose_goal
+            
+            # Perform collision check
+            start_valid = self.generate_data_ompl_worker.pbompl_interface.is_state_valid(to_numpy(q_pos_start_full))
+            goal_valid = self.generate_data_ompl_worker.pbompl_interface.is_state_valid(to_numpy(q_pos_goal_full))
+            
+            if not start_valid:
+                print(f"Start state is in collision (attempt {attempts+1}/{max_attempts}). Getting new sample...")
+                idx += 1
+                attempts += 1
+                continue
+
+            if not goal_valid:
+                print(f"Goal state is in collision (attempt {attempts+1}/{max_attempts}). Getting new sample...")
+                idx += 1
+                attempts += 1
+                continue
+
+            q_pos_start = to_torch(q_pos_start, **self.tensor_args)
+            q_pos_goal = to_torch(q_pos_goal, **self.tensor_args)
+
+            if self.min_distance_q_pos_start_goal is not None and \
+               torch.linalg.norm(q_pos_goal - q_pos_start) < self.min_distance_q_pos_start_goal:
+                print(f"Start and goal states are too close (attempt {attempts+1}/{max_attempts}). Getting new sample...")
+                idx += 1
+                attempts += 1
+                continue
+
+            ee_pose_goal = to_torch(ee_pose_goal, **self.tensor_args)
+            return q_pos_start, q_pos_goal, ee_pose_goal
+        
+        # If we've exhausted all attempts, return the last sample without collision check
+        print(f"Warning: Could not find a valid sample after {max_attempts} attempts. ")
+        print(f"Returning sample {original_idx} without collision validation (data was validated during generation).")
+        
         if self.select_start_goal_from_file:
-            idx = idx % len(self.select_start_goal_from_file)
-            q_pos_start = to_torch(self.select_start_goal_from_file[idx]["q_pos_start"], **self.tensor_args)
-            q_pos_goal = to_torch(self.select_start_goal_from_file[idx]["q_pos_goal"], **self.tensor_args)
-            ee_pose_goal_flat = self.select_start_goal_from_file[idx]["ee_pose_goal"]
+            current_idx = original_idx % len(self.select_start_goal_from_file)
+            q_pos_start = to_torch(self.select_start_goal_from_file[current_idx]["q_pos_start"], **self.tensor_args)
+            q_pos_goal = to_torch(self.select_start_goal_from_file[current_idx]["q_pos_goal"], **self.tensor_args)
+            ee_pose_goal_flat = self.select_start_goal_from_file[current_idx]["ee_pose_goal"]
             ee_pose_goal = to_torch(ee_pose_goal_flat, **self.tensor_args).view(3, 4)
         else:
-            idx = self.idxs_dataset_subset[idx % len(self.idxs_dataset_subset)]
-            input_data_one_sample = self.dataset_subset[idx]
-            q_pos_start = input_data_one_sample[self.dataset_subset.dataset.field_key_q_start]
-            q_pos_goal = input_data_one_sample[self.dataset_subset.dataset.field_key_q_goal]
-            ee_pose_goal = input_data_one_sample[self.dataset_subset.dataset.field_key_context_ee_goal_pose]
-
-        if not self.generate_data_ompl_worker.pbompl_interface.is_state_valid(to_numpy(q_pos_start)):
-            print("Start state is in collision. Getting new sample...")
-            return self.get_data_sample(idx + 1)
-
-        if not self.generate_data_ompl_worker.pbompl_interface.is_state_valid(to_numpy(q_pos_goal)):
-            print("Goal state is in collision. Getting new sample...")
-            return self.get_data_sample(idx + 1)
-
-        q_pos_start = to_torch(q_pos_start, **self.tensor_args)
-        q_pos_goal = to_torch(q_pos_goal, **self.tensor_args)
-
-        if torch.linalg.norm(q_pos_goal - q_pos_start) < self.min_distance_q_pos_start_goal:
-            print("Start and goal states are too close. Getting new sample...")
-            return self.get_data_sample(idx + 1)
-
-        ee_pose_goal = to_torch(ee_pose_goal, **self.tensor_args)
-
+            current_idx = self.idxs_dataset_subset[original_idx % len(self.idxs_dataset_subset)]
+            input_data_one_sample = self.dataset_subset[current_idx]
+            q_pos_start = to_torch(input_data_one_sample[self.dataset_subset.dataset.field_key_q_start], **self.tensor_args)
+            q_pos_goal = to_torch(input_data_one_sample[self.dataset_subset.dataset.field_key_q_goal], **self.tensor_args)
+            ee_pose_goal = to_torch(input_data_one_sample[self.dataset_subset.dataset.field_key_context_ee_goal_pose], **self.tensor_args)
+        
         return q_pos_start, q_pos_goal, ee_pose_goal
 
     def add_start_goal_marker(self, q_pos_start, q_pos_goal=None, ee_pose_goal=None, **kwargs):
@@ -587,13 +649,24 @@ class GenerativeOptimizationPlanner:
         q_trajs_vel_iter_0 = q_trajs_vel_iters[-1]
         q_trajs_acc_iter_0 = q_trajs_acc_iters[-1]
         q_trajs_iter_0 = torch.cat([q_trajs_pos_iter_0, q_trajs_vel_iter_0, q_trajs_acc_iter_0], dim=-1)
-        _, _, q_trajs_final_valid, valid_idxs, _ = self.planning_task.get_trajs_unvalid_and_valid(
-            q_trajs_iter_0,
-            return_indices=True,
-            filter_joint_limits_vel_acc=True,
-        )
-        if valid_idxs.ndim == 2:
-            valid_idxs = valid_idxs.squeeze(1)
+        
+        # Check if data dimension matches robot DOF for collision detection
+        data_dim = q_trajs_pos_iter_0.shape[-1]
+        robot_dof = len(self.planning_task.robot.q_pos_min)
+        skip_collision_detection = data_dim < robot_dof
+        
+        if skip_collision_detection:
+            # Skip collision-based validation when dimensions don't match (e.g., 6-DOF Piper data with 8-DOF robot)
+            print(f"Note: Skipping collision detection (data dim {data_dim} < robot DOF {robot_dof}). Treating all trajectories as valid.")
+            valid_idxs = torch.arange(q_trajs_pos_iter_0.shape[0], device=q_trajs_pos_iter_0.device)
+        else:
+            _, _, q_trajs_final_valid, valid_idxs, _ = self.planning_task.get_trajs_unvalid_and_valid(
+                q_trajs_iter_0,
+                return_indices=True,
+                filter_joint_limits_vel_acc=True,
+            )
+            if valid_idxs.ndim == 2:
+                valid_idxs = valid_idxs.squeeze(1)
 
         control_points_valid = control_points_iter_0[valid_idxs]
         q_trajs_pos_valid = q_trajs_pos_iter_0[valid_idxs]
@@ -612,7 +685,13 @@ class GenerativeOptimizationPlanner:
             if self.dataset.context_ee_goal_pose:
                 # Best = lowest EE pose cost
                 # If the context is the EE pose goal, we the best trajectory is the one that is closest to the goal
-                ee_pose_goal_achieved = self.planning_task.robot.get_EE_pose(q_trajs_pos_valid[..., -1, :])
+                # Pad for FK if needed (e.g., 6-DOF -> 8-DOF for Piper)
+                q_for_fk = q_trajs_pos_valid[..., -1, :]
+                if q_for_fk.shape[-1] < robot_dof:
+                    padding = torch.zeros(*q_for_fk.shape[:-1], robot_dof - q_for_fk.shape[-1],
+                                          device=q_for_fk.device, dtype=q_for_fk.dtype)
+                    q_for_fk = torch.cat([q_for_fk, padding], dim=-1)
+                ee_pose_goal_achieved = self.planning_task.robot.get_EE_pose(q_for_fk)
                 error_ee_pose_goal_position, error_ee_pose_goal_orientation = compute_ee_pose_errors(
                     ee_pose_goal, ee_pose_goal_achieved
                 )

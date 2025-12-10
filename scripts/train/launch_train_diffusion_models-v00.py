@@ -167,7 +167,7 @@ for single_experiment_params_base, parametric_trajectory_class, dataset_file_mer
 
 os.environ["WANDB_API_KEY"] = "999"
 wandb_options = dict(
-    wandb_mode="online", wandb_entity="mpd-splines", wandb_project=EXPERIMENT_NAME  # "online", "offline" or "disabled"
+    wandb_mode="offline", wandb_entity="mpd-splines", wandb_project=EXPERIMENT_NAME  # "online", "offline" or "disabled"
 )
 
 for single_experiment_params in single_experiment_params_l:

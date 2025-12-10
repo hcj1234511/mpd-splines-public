@@ -104,7 +104,16 @@ class GenerateDataOMPL:
         self.pbompl_interface.set_planner(planner)
 
         # add obstacles
-        self.add_obstacles()
+        self.add_obstacles()  # 添加 warehouse 环境障碍物
+
+        # 禁用自碰撞检查（Piper 机器人的 URDF 自碰撞检测有问题）
+        # 注意：必须在 add_obstacles 之后调用，以便正确设置程与障碍物的碰撞检测
+        self.pbompl_interface.setup_collision_detection(
+            self.robot_pbompl,
+            self.obstacles,
+            self_collisions=False,  # 禁用自碰撞检查
+            allow_collision_links=[]
+        )
 
     def clear_obstacles(self):
         for obstacle in self.obstacles:
@@ -441,23 +450,21 @@ def experiment(
     # robot_id: str = 'RobotPlanar2Link',
     # env_id: str = 'EnvPlanar4Link',
     # robot_id: str = 'RobotPlanar4Link',
-    # env_id: str = 'EnvSpheres3D',
+    # env_id: str = "EnvSpheres3D",
     # env_id: str = 'EnvSpheres3DExtraObjectsV00',
     # env_id: str = 'EnvTableShelf',
     # env_id: str = 'EnvPilars3D',
-    # robot_id: str = 'RobotPanda',
     env_id: str = "EnvWarehouse",
-    robot_id: str = "RobotPanda",
+    # env_id: str = "EnvPiperWorkspace",
+    robot_id: str = "RobotPiper",
     ############################################################################
-    start_task_id: int = 49400,
-    num_tasks: int = 5,
+    start_task_id: int = 0,
+    num_tasks: int = 100,
     num_trajectories_per_task: int = 1,
     ############################################################################
     sample_joint_position_goals_with_same_ee_pose: bool = False,
     cfg_file: str = "None",
-    # cfg_file: str = "EnvTableShelf-RobotPanda.yaml",
-    # cfg_file: str = "EnvWarehouse-RobotPanda.yaml",
-    # cfg_file: str = "EnvWarehouse-RobotPanda_v01.yaml",
+    # cfg_file: str = "EnvWarehouse-RobotPiper.yaml",
     ############################################################################
     min_distance_robot_env: float = 0.00,
     min_distance_q_pos_start_goal: float = 0.0,  # minimum distance between start and goal joint positions
@@ -477,7 +484,7 @@ def experiment(
     bspline_degree: int = 5,
     bspline_zero_vel_at_start_and_goal: bool = True,
     bspline_zero_acc_at_start_and_goal: bool = True,
-    interpolate_num: int = 128,  # number of waypoints to interpolate the path
+    interpolate_num: int = 256,  # number of waypoints to interpolate the path
     #######################################
     n_parallel_jobs: int = 1,  # Set to 1 to debug with pybullet GUI
     # n_parallel_jobs: int = os.cpu_count(),
@@ -606,29 +613,35 @@ def experiment(
     end_times = [r["end_planning_time"] for r in results_dict_l]
     run_times = [r["run_planning_time"] for r in results_dict_l]
 
-    # this is the window when actual planning computation happened
-    planning_computation_time = max(end_times) - min(start_times)
+    # Check if any trajectories were generated
+    if len(start_times) > 0 and len(end_times) > 0 and len(run_times) > 0:
+        # this is the window when actual planning computation happened
+        planning_computation_time = max(end_times) - min(start_times)
 
-    print("-" * 80)
-    print(f"Total joblib wall time (incl. overhead): {t_generate_data.elapsed:.4f} sec")
-    print(f"Actual parallel compute window: {planning_computation_time:.4f} sec")
-    print(f"Ideal parallel time (max individual runtime): {max(run_times):.4f} sec")
-    print(f"Total compute time (sum of all workers): {sum(run_times):.4f} sec")
-    print(f"Parallel speedup: {sum(run_times) / planning_computation_time:.2f}x")
+        print("-" * 80)
+        print(f"Total joblib wall time (incl. overhead): {t_generate_data.elapsed:.4f} sec")
+        print(f"Actual parallel compute window: {planning_computation_time:.4f} sec")
+        print(f"Ideal parallel time (max individual runtime): {max(run_times):.4f} sec")
+        print(f"Total compute time (sum of all workers): {sum(run_times):.4f} sec")
+        print(f"Parallel speedup: {sum(run_times) / planning_computation_time:.2f}x")
 
-    with open(pathlib.Path(results_dir) / "timing_stats.pkl", "wb") as fp:
-        pickle.dump(
-            {
-                "num_plans": len(task_id_l),
-                "num_parallel_jobs": n_parallel_jobs,
-                "joblib_wall_time": t_generate_data.elapsed,
-                "planning_computation_time": planning_computation_time,
-                "ideal_parallel_time": max(run_times),
-                "total_compute_time": sum(run_times),
-                "parallel_speedup": sum(run_times) / planning_computation_time,
-            },
-            fp,
-        )
+        with open(pathlib.Path(results_dir) / "timing_stats.pkl", "wb") as fp:
+            pickle.dump(
+                {
+                    "num_plans": len(task_id_l),
+                    "num_parallel_jobs": n_parallel_jobs,
+                    "joblib_wall_time": t_generate_data.elapsed,
+                    "planning_computation_time": planning_computation_time,
+                    "ideal_parallel_time": max(run_times),
+                    "total_compute_time": sum(run_times),
+                    "parallel_speedup": sum(run_times) / planning_computation_time,
+                },
+                fp,
+            )
+    else:
+        print("-" * 80)
+        print(f"WARNING: No trajectories were successfully generated!")
+        print(f"Total joblib wall time: {t_generate_data.elapsed:.4f} sec")
 
     ####################################################################################################################
     # Merge results for hdf5 format

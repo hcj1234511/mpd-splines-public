@@ -26,14 +26,14 @@ hostname = socket.gethostname()
 
 LOCAL = is_local()
 TEST = False
-# USE_CUDA = True
-USE_CUDA = False
+# USE_CUDA = True  # 使用 GPU 加速
+USE_CUDA = False  # 轨迹生成主要用 CPU
 
 
-N_EXPS_IN_PARALLEL = os.cpu_count() if not USE_CUDA and LOCAL else 1
+N_EXPS_IN_PARALLEL = 1  # 单进程运行，避免 PyBullet 多进程冲突
 
-# N_CORES = N_EXPS_IN_PARALLEL
-N_CORES = 1
+N_CORES = 1  # 单线程，避免死锁
+# N_CORES = 4
 MEMORY_SINGLE_JOB = 3000
 MEMORY_PER_CORE = N_EXPS_IN_PARALLEL * MEMORY_SINGLE_JOB // N_CORES
 if "logc" in hostname:
@@ -92,26 +92,41 @@ configs_d = {
     # one trajectory per task
     "one": [
         # joint to joint
-        exp_config("EnvSimple2D", "RobotPointMass2D", 10000, 1, 0.01, PLANNER, 10.0, 30, 5, False, None),
-        exp_config("EnvNarrowPassageDense2D", "RobotPointMass2D", 10000, 1, 0.01, PLANNER, 10.0, 30, 5, False, None),
-        exp_config("EnvPlanar2Link", "RobotPlanar2Link", 10000, 1, 0.01, PLANNER, 10.0, 30, 5, False, None),
-        exp_config("EnvPlanar4Link", "RobotPlanar4Link", 100000, 1, 0.01, PLANNER, 10.0, 30, 5, False, None),
-        exp_config("EnvSpheres3D", "RobotPanda", 1000000, 1, 0.02, PLANNER, 10.0, 38, 5, False, None),
-        exp_config("EnvWarehouse", "RobotPanda", 1000000, 1, 0.02, PLANNER, 10.0, 30, 5, False, None),
-        exp_config("EnvPilars3D", "RobotPanda", 500000, 1, 0.02, PLANNER, 10.0, 30, 5, False, None),
-        # with configuration file
+        # exp_config("EnvSimple2D", "RobotPointMass2D", 10000, 1, 0.01, PLANNER, 10.0, 30, 5, False, None),
+        # exp_config("EnvNarrowPassageDense2D", "RobotPointMass2D", 10000, 1, 0.01, PLANNER, 10.0, 30, 5, False, None),
+        # exp_config("EnvPlanar2Link", "RobotPlanar2Link", 10000, 1, 0.01, PLANNER, 10.0, 30, 5, False, None),
+        # exp_config("EnvPlanar4Link", "RobotPlanar4Link", 100000, 1, 0.01, PLANNER, 10.0, 30, 5, False, None),
+        # exp_config("EnvSpheres3D", "RobotPanda", 1000000, 1, 0.02, PLANNER, 10.0, 38, 5, False, None),
+        # exp_config("EnvWarehouse", "RobotPanda", 1000000, 1, 0.02, PLANNER, 10.0, 30, 5, False, None),
+        # exp_config("EnvPilars3D", "RobotPanda", 500000, 1, 0.02, PLANNER, 10.0, 30, 5, False, None),
+        # with configuration file - Panda
+        # exp_config(
+        #     "EnvWarehouse",
+        #     "RobotPanda",
+        #     500000,
+        #     1,
+        #     0.02,
+        #     PLANNER,
+        #     10.0,
+        #     29,
+        #     5,
+        #     False,
+        #     "EnvWarehouse-RobotPanda_v01.yaml",
+        # ),
+        # with configuration file - Piper (使用专用障碍物环境，生成非线性轨迹)
         exp_config(
-            "EnvWarehouse",
-            "RobotPanda",
-            500000,
+            "EnvWarehouse",   # 使用warehouse
+            "RobotPiper",
+            20000,   # 轨迹条数
             1,
-            0.02,
+            0.02,   # 与环境的最小距离
             PLANNER,
             10.0,
             29,
             5,
             False,
-            "EnvWarehouse-RobotPanda_v01.yaml",
+            # "EnvPiperWorkspace-RobotPiper.yaml",  # 使用专用配置文件
+            "EnvWarehouse-RobotPiper.yaml",  # 使用专用配置文件
         ),
     ],
 }
@@ -132,10 +147,10 @@ for selection in configs_d_keys_filter:
 
     ###############################
     # Launch jobs
-    n_job = 0
+    n_job = 10
     for k, config in enumerate(configs):
         n_tasks_to_process_total = config.num_tasks
-        start_task_id = 0
+        start_task_id = 100000
 
         while n_tasks_to_process_total > 0:
             if not LOCAL:  # Wait for jobs to finish in the cluster
@@ -185,7 +200,7 @@ for selection in configs_d_keys_filter:
                 use_timestamp=False,
                 check_results_directories=False,
                 compact_dirs=True,
-                base_dir="../../data_trajectories",
+                base_dir="../../data_trajectories_hcj",
             )
 
             ############################################################################################################

@@ -76,18 +76,33 @@ class SummaryTrajectoryGeneration(SummaryBase):
 
         # ------------------------------------------------------------------------------------
         # STATISTICS
-        wandb.log(
-            {f"{prefix}percentage free trajs": planning_task.compute_fraction_valid_trajs(q_pos_trajs)}, step=train_step
-        )
-        wandb.log(
-            {f"{prefix}percentage collision intensity": planning_task.compute_collision_intensity_trajs(q_pos_trajs)},
-            step=train_step,
-        )
-        wandb.log({f"{prefix}success": planning_task.compute_success_valid_trajs(q_pos_trajs)}, step=train_step)
+        # Skip collision-based statistics if data dimension doesn't match robot DOF
+        data_dim = q_pos_trajs.shape[-1]
+        robot_dof = len(planning_task.robot.q_pos_min)
+        if data_dim < robot_dof:
+            # Skip collision statistics for reduced-DOF data (e.g., 6-DOF Piper data with 8-DOF robot)
+            wandb.log({f"{prefix}percentage free trajs": -1.0}, step=train_step)  # placeholder
+            wandb.log({f"{prefix}percentage collision intensity": -1.0}, step=train_step)
+            wandb.log({f"{prefix}success": -1.0}, step=train_step)
+        else:
+            wandb.log(
+                {f"{prefix}percentage free trajs": planning_task.compute_fraction_valid_trajs(q_pos_trajs)}, step=train_step
+            )
+            wandb.log(
+                {f"{prefix}percentage collision intensity": planning_task.compute_collision_intensity_trajs(q_pos_trajs)},
+                step=train_step,
+            )
+            wandb.log({f"{prefix}success": planning_task.compute_success_valid_trajs(q_pos_trajs)}, step=train_step)
 
-        # EE pose errors
+        # EE pose errors - need to pad q_pos for FK
+        q_pos_for_fk = q_pos_trajs[..., -1, :]
+        if data_dim < robot_dof:
+            # Pad with zeros for gripper joints
+            padding = torch.zeros(*q_pos_for_fk.shape[:-1], robot_dof - data_dim, 
+                                   device=q_pos_for_fk.device, dtype=q_pos_for_fk.dtype)
+            q_pos_for_fk = torch.cat([q_pos_for_fk, padding], dim=-1)
         ee_pose_goal = torch.cat(ee_goal_pose_l, dim=0)
-        ee_pose_goal_achieved = planning_task.robot.get_EE_pose(q_pos_trajs[..., -1, :])
+        ee_pose_goal_achieved = planning_task.robot.get_EE_pose(q_pos_for_fk)
         error_ee_pose_goal_position, error_ee_pose_goal_orientation = compute_ee_pose_errors(
             ee_pose_goal, ee_pose_goal_achieved
         )

@@ -1,0 +1,16 @@
+# Collision spheres for Piper robot without gripper (6 DOF)
+# Format: [x, y, z, radius]
+base_link:
+- [0.0, 0.0, 0.05, 0.15]
+link1:
+- [0.0, 0.0, 0.0, 0.08]
+link2:
+- [0.1, 0.0, 0.0, 0.08]
+link3:
+- [0.0, -0.1, 0.0, 0.08]
+link4:
+- [0.0, 0.0, 0.0, 0.06]
+link5:
+- [0.0, -0.05, 0.0, 0.06]
+link6:
+- [0.0, 0.0, 0.05, 0.07]

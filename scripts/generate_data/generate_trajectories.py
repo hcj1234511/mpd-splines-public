@@ -108,11 +108,29 @@ class GenerateDataOMPL:
 
         # 禁用自碰撞检查（Piper 机器人的 URDF 自碰撞检测有问题）
         # 注意：必须在 add_obstacles 之后调用，以便正确设置程与障碍物的碰撞检测
+        # 获取夹爪的 link indices（固定关节连接的 links 不会被 get_moving_links 返回）
+        # 对于 piper_description_gripper_fixed.urdf:
+        #   gripper_base (index 6), link7 (index 7), link8 (index 8)
+        extra_collision_links = []
+        if hasattr(self.robot_tr, 'gripper_q_dim') and self.robot_tr.gripper_q_dim == 0:
+            # 如果是 6 DOF 模式（夹爪固定），添加夹爪 links 到碰撞检测
+            # 检查 URDF 中是否有夹爪 links
+            num_joints = self.pybullet_client.getNumJoints(self.robot_pbompl.id)
+            for i in range(num_joints):
+                joint_info = self.pybullet_client.getJointInfo(self.robot_pbompl.id, i)
+                link_name = joint_info[12].decode('UTF-8')
+                joint_type = joint_info[2]
+                # 如果是固定关节且是夹爪相关的 link，添加到额外碰撞检测
+                if joint_type == self.pybullet_client.JOINT_FIXED and link_name in ['gripper_base', 'link7', 'link8']:
+                    extra_collision_links.append(i)
+                    print(f"Adding fixed gripper link to collision detection: {link_name} (index {i})")
+        
         self.pbompl_interface.setup_collision_detection(
             self.robot_pbompl,
             self.obstacles,
             self_collisions=False,  # 禁用自碰撞检查
-            allow_collision_links=[]
+            allow_collision_links=[],
+            extra_collision_links=extra_collision_links  # 添加固定夹爪 links 到碰撞检测
         )
 
     def clear_obstacles(self):
@@ -208,7 +226,10 @@ class GenerateDataOMPL:
 
             q_pos_goal_tmp_l = []
             # check if the distance between the start and goal states is greater than min_distance_q_pos_start_goal
-            if np.linalg.norm(q_pos_start_tmp - q_pos_goal_tmp) < min_distance_q_pos_start_goal:
+            # Convert to numpy arrays if they are lists (from IK solver)
+            q_pos_start_tmp_np = np.array(q_pos_start_tmp) if isinstance(q_pos_start_tmp, list) else q_pos_start_tmp
+            q_pos_goal_tmp_np = np.array(q_pos_goal_tmp) if isinstance(q_pos_goal_tmp, list) else q_pos_goal_tmp
+            if np.linalg.norm(q_pos_start_tmp_np - q_pos_goal_tmp_np) < min_distance_q_pos_start_goal:
                 print(f"{i}")
                 continue
 
@@ -351,7 +372,7 @@ def get_random_ee_pose_from_cfg_file(env_id, robot_id, cfg_file_path):
     assert robot_id == cfg_ee["robot_id"], f"robot_id mismatch: {robot_id} != {cfg_ee['robot_id']}"
 
     pose_region_ids = list(cfg_ee["pose_regions"].keys())
-
+    
     ee_pose_start = None
 
     # randomly move between pose regions or go to one of the pose regions
@@ -400,7 +421,8 @@ def generate_trajectories_run(
             planner=planner,
             min_distance_robot_env=min_distance_robot_env,
             tensor_args=tensor_args,
-            gripper=True,  # By default, to generate data, add the gripper to the robot
+            gripper=False,  # 6 DOF arm (no controllable gripper joints)
+            gripper_collision=True,  # Include fixed gripper for collision detection
             pybullet_mode=pybullet_mode,
             debug=debug,
         )
@@ -466,7 +488,7 @@ def experiment(
     cfg_file: str = "None",
     # cfg_file: str = "EnvWarehouse-RobotPiper.yaml",
     ############################################################################
-    min_distance_robot_env: float = 0.00,
+    min_distance_robot_env: float = 0.01,  # 增加安全距离，避免碰撞检测误差
     min_distance_q_pos_start_goal: float = 0.0,  # minimum distance between start and goal joint positions
     # planner parameters
     # planner: str = "PRM",
@@ -524,7 +546,8 @@ def experiment(
         planner=planner,
         min_distance_robot_env=min_distance_robot_env,
         tensor_args=tensor_args,
-        gripper=True,  # By default, to generate data, add the gripper to the robot
+        gripper=False,  # 6 DOF arm (no controllable gripper joints)
+        gripper_collision=True,  # Include fixed gripper for collision detection
         pybullet_mode=pybullet_mode,
         debug=debug,
     )

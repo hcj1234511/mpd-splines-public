@@ -13,21 +13,46 @@ from torch_robotics.visualizers.plot_utils import plot_coordinate_frame, create_
 
 class RobotPiper(RobotBase):
 
-    link_name_ee = "gripper_base"  # must be in the urdf file
+    link_name_ee = "link6"  # must be in the urdf file
 
-    def __init__(self, gripper=True, tensor_args=DEFAULT_TENSOR_ARGS, **kwargs):
-
-        urdf_robot_file = os.path.join(
-            get_robot_path(), "piper_description", "urdf", "piper_description_fixed.urdf"
-        )
+    def __init__(self, gripper=False, gripper_collision=True, tensor_args=DEFAULT_TENSOR_ARGS, **kwargs):
+        """
+        Args:
+            gripper: If True, gripper joints are controllable (8 DOF)
+                     If False, gripper joints are fixed or removed (6 DOF)
+            gripper_collision: If True, include gripper in collision detection (only when gripper=False)
+                              If False, no gripper collision (lighter model)
+        """
+        # Use different URDF and collision config based on gripper flags
+        if gripper:
+            # Full 8 DOF with controllable gripper
+            urdf_robot_file = os.path.join(
+                get_robot_path(), "piper_description", "urdf", "piper_description_fixed.urdf"
+            )
+            collision_spheres_file = os.path.join(get_configs_path(), "piper/piper_sphere_config.yaml")
+            gripper_q_dim = 2  # Two gripper joints (joint7 and joint8)
+        elif gripper_collision:
+            # 6 DOF with fixed gripper for collision detection
+            urdf_robot_file = os.path.join(
+                get_robot_path(), "piper_description", "urdf", "piper_description_gripper_fixed.urdf"
+            )
+            collision_spheres_file = os.path.join(get_configs_path(), "piper/piper_sphere_config.yaml")
+            gripper_q_dim = 0  # No controllable gripper joints
+        else:
+            # 6 DOF without gripper (no gripper collision)
+            urdf_robot_file = os.path.join(
+                get_robot_path(), "piper_description", "urdf", "piper_description_no_gripper.urdf"
+            )
+            collision_spheres_file = os.path.join(get_configs_path(), "piper/piper_sphere_config_no_gripper.yaml")
+            gripper_q_dim = 0  # No gripper joints
 
         ##########################################################################################
         super().__init__(
             urdf_robot_file=urdf_robot_file,
-            collision_spheres_file_path=os.path.join(get_configs_path(), "piper/piper_sphere_config.yaml"),
+            collision_spheres_file_path=collision_spheres_file,
             joint_limits_file_path=os.path.join(get_configs_path(), "piper/joint_limits.yaml"),
             link_name_ee=self.link_name_ee,
-            gripper_q_dim=2 if gripper else 0,  # Two gripper joints (joint7 and joint8)
+            gripper_q_dim=gripper_q_dim,
             tensor_args=tensor_args,
             **kwargs,
         )

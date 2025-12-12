@@ -5,9 +5,9 @@ root_dir = Path('/home/hong/Projects/MotionPlanningDiffusion/mpd-splines-public'
 
 # path = root_dir / 'scripts' / 'generate_data' / 'data' / 'env-robot' / '1764753835' / 'dataset.hdf5'
 # path = root_dir / 'data_trajectories_hcj' / 'piper_100000_obstacle-free' / 'dataset_merged_processed.hdf5' 
-path = root_dir / 'data_trajectories' / 'EnvWarehouse-RobotPanda-config_file_v01-joint_joint-one-RRTConnect' / 'dataset_merged_doubled.hdf5'
-
+# path = root_dir / 'data_trajectories' / 'EnvWarehouse-RobotPanda-config_file_v01-joint_joint-one-RRTConnect' / 'dataset_merged_doubled.hdf5'
 # path = root_dir / 'data_trajectories_hcj' / 'dataset.hdf5'
+path = root_dir / 'scripts' / 'Hcj' / 'test_data' / 'dataset.hdf5'
 
 # print("path =", path)
 # print("exists:", path.exists())
@@ -21,11 +21,12 @@ with h5py.File(path, 'r') as f:
     sol_path = f['sol_path']
     sol_path_after_bspline_fit = f['sol_path_after_bspline_fit']
     task_id = f["task_id"]
-
+    success = f["success"]
     # traj = sol_path[9] 
     print(sol_path.shape)
-
-# import matplotlib.pyplot as plt
+    for i in range(len(success)):
+        print(f"success{i}:{success[i]}")
+# import matplotlib.pyplot as plt   
 # import numpy as np
 
 #        # (256,7)

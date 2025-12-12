@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-测试 Piper 机械臂的 FK 和 IK
+测试 Panda 机械臂的 FK 和 IK
 使用项目中的 robot_tree.py 实现
 
 使用方法：
     cd /home/hong/Projects/MotionPlanningDiffusion/mpd-splines-public
     source set_env_variables.sh
     conda activate mpd-splines-public
-    python scripts/Hcj/test_piper_ik.py
+    python scripts/Hcj/test_panda_ik.py
 """
 
 import sys
@@ -16,7 +16,7 @@ import torch
 # 添加项目路径
 sys.path.insert(0, '/home/hong/Projects/MotionPlanningDiffusion/mpd-splines-public')
 
-from torch_robotics.robots import RobotPiper
+from torch_robotics.robots import RobotPanda
 from torch_robotics.torch_kinematics_tree.geometrics.utils import (
     link_pos_from_link_tensor,
     link_rot_from_link_tensor,
@@ -26,7 +26,7 @@ from torch_robotics.torch_utils.torch_utils import to_numpy
 
 def main():
     print("=" * 70)
-    print("Piper 机械臂 FK/IK 测试")
+    print("Panda 机械臂 FK/IK 测试")
     print("=" * 70)
     
     # 设置设备
@@ -35,14 +35,12 @@ def main():
     print(f"使用设备: {device}")
     
     # 加载机器人
-    print("\n1. 加载 RobotPiper...")
-    robot = RobotPiper(tensor_args=tensor_args)
-    diff_robot = robot.diff_piper  # 可微分运动学模型
+    print("\n1. 加载 RobotPanda...")
+    robot = RobotPanda(tensor_args=tensor_args)
+    diff_robot = robot.diff_panda  # 可微分运动学模型
     
     print(f"   ✅ 加载成功！")
     print(f"   - 总关节数量 (q_dim): {robot.q_dim}")
-    print(f"   - 手臂关节数量 (arm_q_dim): {robot.arm_q_dim}")
-    print(f"   - 夹爪关节数量 (gripper_q_dim): {robot.gripper_q_dim}")
     print(f"   - 可微分模型关节数 (_n_dofs): {diff_robot._n_dofs}")
     print(f"   - 末端执行器 link: {robot.link_name_ee}")
     print(f"   - 模型路径: {diff_robot.model_path}")
@@ -59,12 +57,12 @@ def main():
     print("3. 测试正运动学 (FK) - 关节全为0")
     print("=" * 70)
     
-    # 设置关节角度为0 (使用 diff_robot._n_dofs)
+    # 设置关节角度为0
     q_zero = torch.zeros(1, diff_robot._n_dofs, **tensor_args)
     print(f"   输入关节角度: {to_numpy(q_zero[0])}")
     
     # 计算 FK
-    ee_link = robot.link_name_ee  # "gripper_base"
+    ee_link = robot.link_name_ee  # "panda_hand"
     H_fk = diff_robot.compute_forward_kinematics_all_links(q_zero, link_list=[ee_link])
     
     # 提取位置和旋转
@@ -85,22 +83,21 @@ def main():
     H_target = H_fk.clone().squeeze(1)  # [batch, 4, 4]
     print(f"   目标位置: {to_numpy(pos_fk)}")
     
-    # 从零位附近开始求解 IK (更容易收敛到正确解)
+    # 从零位附近开始求解 IK
     q_init = torch.zeros(1, diff_robot._n_dofs, **tensor_args)
-    # 不添加随机扰动，直接从零位开始
     print(f"   初始关节角度: {to_numpy(q_init[0])}")
     
-    # 求解 IK (从零位附近开始，更容易收敛)
+    # 求解 IK
     print("\n   正在求解 IK...")
     q_ik, idx_valid = diff_robot.inverse_kinematics(
         H_target,
         link_name=ee_link,
         batch_size=1,
         q0=q_init,
-        q0_noise=0.01,  # 减少初始噪声
+        q0_noise=0.01,
         max_iters=1000,
-        lr=0.003,  # 降低学习率
-        se3_eps=0.1,  # 放宽收敛阈值
+        lr=0.05,
+        se3_eps=0.1,
         print_freq=200,
     )
     
@@ -131,7 +128,7 @@ def main():
     print(f"   旋转误差: {rot_error:.6e}")
     
     # 关节空间误差
-    joint_error = torch.linalg.norm(q_ik[0, :6] - q_zero[0, :6]).item()
+    joint_error = torch.linalg.norm(q_ik[0] - q_zero[0]).item()
     print(f"   关节误差 (与零位): {joint_error:.6f} rad")
     
     # ============================================
@@ -141,10 +138,10 @@ def main():
     print("6. 测试另一个关节配置")
     print("=" * 70)
     
-    # 设置一个非零关节配置
+    # 设置一个非零关节配置 (Panda 有 7 个关节)
     q_test = torch.zeros(1, diff_robot._n_dofs, **tensor_args)
-    q_test[0, :6] = torch.tensor([0.5, 0.5, -0.5, -0.2, 0.3, 0.1], **tensor_args)
-    print(f"   测试关节角度: {to_numpy(q_test[0, :6])}")
+    q_test[0, :7] = torch.tensor([0.5, -0.3, 0.4, -1.5, 0.3, 1.2, 0.1], **tensor_args)
+    print(f"   测试关节角度: {to_numpy(q_test[0, :7])}")
     
     # FK
     H_test = diff_robot.compute_forward_kinematics_all_links(q_test, link_list=[ee_link])
@@ -167,15 +164,15 @@ def main():
         print_freq=200,
     )
     
-    print(f"\n   IK 求解结果: {to_numpy(q_ik2[0, :6])}")
-    print(f"   原始关节角度: {to_numpy(q_test[0, :6])}")
+    print(f"\n   IK 求解结果: {to_numpy(q_ik2[0, :7])}")
+    print(f"   原始关节角度: {to_numpy(q_test[0, :7])}")
     print(f"   求解成功: {idx_valid2.nelement() > 0}")
     
     # 验证
     H_verify2 = diff_robot.compute_forward_kinematics_all_links(q_ik2, link_list=[ee_link])
     pos_verify2 = link_pos_from_link_tensor(H_verify2).squeeze()
     pos_error2 = torch.linalg.norm(pos_verify2 - pos_test).item()
-    joint_error2 = torch.linalg.norm(q_ik2[0, :6] - q_test[0, :6]).item()
+    joint_error2 = torch.linalg.norm(q_ik2[0, :7] - q_test[0, :7]).item()
     
     print(f"\n   位置误差: {pos_error2:.6e}")
     print(f"   关节误差: {joint_error2:.6f} rad")

@@ -117,7 +117,7 @@ configs_d = {
         exp_config(
             "EnvWarehouse",   # 使用warehouse
             "RobotPiper",
-            20000,   # 轨迹条数
+            20,   # 轨迹条数
             1,
             0.02,   # 与环境的最小距离
             PLANNER,
